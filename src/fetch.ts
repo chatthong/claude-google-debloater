@@ -3,16 +3,16 @@ import { createWriteStream } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { listMessageIds, getMessageHeaders } from "./lib/gws.ts";
 import { Reporter } from "./lib/report.ts";
+import {
+  extractYearsArg,
+  gmailYearClause,
+  parseYearRange,
+  stripYearsFlag,
+} from "./lib/years.ts";
 
 const OUTPUT_DIR = "out";
 const HEADERS_FILE = `${OUTPUT_DIR}/headers.jsonl`;
 const CONCURRENCY = Number(process.env.CLEANUP_CONCURRENCY ?? 8);
-
-/**
- * Default Gmail search query. Scans the whole mailbox excluding chats.
- * Override via the first positional CLI argument:
- *   `pnpm fetch "category:promotions"`
- */
 const DEFAULT_QUERY = "in:anywhere -in:chats";
 
 async function loadAlreadyFetched(): Promise<Set<string>> {
@@ -48,7 +48,27 @@ async function runPool<T>(
   await Promise.all(runners);
 }
 
-export async function fetchHeaders(query = DEFAULT_QUERY): Promise<void> {
+/**
+ * Build the effective Gmail query from CLI args. Positional argument
+ * (if any) is treated as the base query; --years adds an after:/before:
+ * clause on top.
+ *
+ *   pnpm fetch                                  → DEFAULT_QUERY
+ *   pnpm fetch "category:promotions"            → that query
+ *   pnpm fetch --years 2025                     → DEFAULT_QUERY + year clause
+ *   pnpm fetch "category:promotions" --years 5  → both combined
+ */
+function buildQuery(args: string[]): string {
+  const positional = stripYearsFlag(args)[0];
+  const base = positional ?? DEFAULT_QUERY;
+  const yearsArg = extractYearsArg(args);
+  if (!yearsArg) return base;
+  const { fromYear, toYear } = parseYearRange(yearsArg);
+  return `${base} ${gmailYearClause(fromYear, toYear)}`;
+}
+
+export async function fetchHeaders(args: string[] = []): Promise<void> {
+  const query = buildQuery(args);
   const report = new Reporter("fetch");
   report.set("Query", `\`${query}\``);
   report.set("Concurrency", CONCURRENCY);

@@ -58,6 +58,26 @@ export function extractYearsArg(args: string[]): string | undefined {
   return undefined;
 }
 
+/** Return the positional (non-flag) args, dropping flag values like the one after `--years`. */
+export function stripYearsFlag(args: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === "--years" || a === "-y") {
+      i++; // skip the value too
+      continue;
+    }
+    if (a.startsWith("--years=")) continue;
+    out.push(a);
+  }
+  return out;
+}
+
+/** Build a Gmail search clause for an inclusive year range. */
+export function gmailYearClause(fromYear: number, toYear: number): string {
+  return `after:${fromYear}/01/01 before:${toYear + 1}/01/01`;
+}
+
 /**
  * Read `headers.jsonl` and return the set of message IDs whose internalDate
  * falls inside [fromYear, toYear] inclusive (UTC).

@@ -441,8 +441,11 @@ pnpm count --years 5                        # narrow to the last 5 years
 pnpm count --years 2025                     # just one year
 pnpm count --years 2018-2026                # explicit range (either direction)
 pnpm buckets                                # Gmail category counts (promotions/social/updates/forums)
+pnpm buckets --years 2025                   # category counts within a year
 pnpm fetch                                  # fetch headers for all messages
 pnpm fetch "category:promotions"            # or scope by Gmail search query
+pnpm fetch --years 2025                     # fetch only messages from a year
+pnpm fetch "category:promotions" --years 5  # combine query + year filter
 ```
 
 After `pnpm count` and/or `pnpm buckets`, in a Claude Code session say
@@ -508,8 +511,10 @@ say to Claude inside a `claude` session at the project root.
 | `pnpm count --years 5` | Narrow to the last N years. |
 | `pnpm count --years 2018-2026` | Explicit range; either direction works (auto-sorted). |
 | `pnpm buckets` | Counts the four Gmail categories (`promotions`/`social`/`updates`/`forums`). Writes `out/buckets.json`. |
+| `pnpm buckets --years 2025` | Category counts limited to a year or range. |
 | **Claude session:** `analyze baseline` | Spawns a Haiku sub-agent that reads `out/count.json` and `out/buckets.json` and writes `out/baseline_analysis.md` with first-sweep recommendations. Prompt: `src/prompts/baseline-analyze.md`. |
 | `pnpm fetch [query]` | Fetch headers (resumable) → `out/headers.jsonl`. Default query: `in:anywhere -in:chats`. Override with any Gmail search syntax. |
+| `pnpm fetch --years 2025` | Fetch only messages dated in a year or range; can be combined with a query. |
 | **Claude session:** `classify` | Drive the Haiku → Sonnet → Opus pipeline over `out/headers.jsonl` → `out/decisions.jsonl`. Tier prompts under `src/prompts/{haiku,sonnet,opus}.md`. |
 | `pnpm plan` | Roll up `out/decisions.jsonl` into `out/cleanup_plan.md` for human review. |
 | `pnpm plan --years 2018-2026` | Same, but scoped to messages whose date falls in the given range (or `--years 5` for last N years). |
