@@ -2,27 +2,25 @@
 
 > Multi-tier LLM-driven Gmail cleanup for inboxes Google won't let you nuke yourself.
 
-A header-only-safe, tiered (Haiku → Sonnet → Opus) email classifier and trash pipeline.
-Designed for the case where you open Gmail, see a six-digit unread counter, and
-realize Google does not ship a "delete most of this" button.
+![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 
-First tool in a planned [Google Debloater Suite](#roadmap) — Photos, Drive, Calendar
-to follow.
+A header-only-safe, tiered (Haiku → Sonnet → Opus) email classifier and trash pipeline.
+First tool in a planned [Google Debloater Suite](#roadmap) — Photos, Drive, Calendar, and Contacts to follow.
 
 ---
 
 ## Table of Contents
 
-- [What problem this solves](#what-problem-this-solves)
-- [Architecture](#architecture)
+- [What it does](#what-it-does)
+- [Quickstart](#quickstart)
+- [How it works](#how-it-works)
 - [Safety model](#safety-model)
-- [Cost estimate](#cost-estimate)
-- [Prerequisites](#prerequisites)
+- [Cost](#cost)
 - [GCP Setup](#gcp-setup)
-- [Setup](#setup)
-- [Usage](#usage)
+- [Configuration](#configuration)
+- [Command reference](#command-reference)
+- [`--years` reference](#--years-reference)
 - [Outputs](#outputs)
-- [File layout](#file-layout)
 - [Tradeoffs & non-goals](#tradeoffs--non-goals)
 - [Roadmap](#roadmap)
 - [Troubleshooting](#troubleshooting)
@@ -33,138 +31,206 @@ to follow.
 
 ---
 
-## What problem this solves
+## What it does
 
 Real-world mailboxes look like this:
 
 ```
 Inbox          ~5,000 – 10,000     actual correspondence
-Updates       ~50,000 – 100,000    transactional, receipts, OTPs, status mails
-Promotions    ~30,000 – 60,000     marketing
-Social        ~20,000 – 50,000     social network notifications
-Purchases       hundreds to low thousands
-Forums          hundreds
-Spam            hundreds           already handled by Google
-                ──
+Updates       ~50,000 – 100,000    transactional, receipts, OTPs, status mail
+Promotions    ~30,000 –  60,000    marketing
+Social        ~20,000 –  50,000    social-network notifications
+Purchases         hundreds – low thousands
+Forums            hundreds
+                  ──────────
 TOTAL         ~100,000 – 250,000
 ```
 
-Manually clearing six-figure bulk-classified messages would take weeks of `Select All →
-Delete → confirm → next page → Select All ...` and Gmail throttles aggressive
-selections. The official Gmail API can `batchModify` 1,000 messages per call but
-exposes no decision-making. We add the missing piece: a layered LLM classifier
-that decides **what to trash, what to keep, what to unsubscribe from, and what
-to label**, then issues the API calls.
+Manually clearing a six-figure inbox takes weeks of `Select All → Delete → confirm
+→ next page → ...` and Gmail throttles aggressive selections. Gmail's API can
+`batchModify` 1,000 messages per call but provides no decision-making.
 
-### Goals
+This tool adds the missing layer: a three-tier LLM classifier (Haiku for the obvious
+bulk, Sonnet for ambiguous cases, Opus as final arbiter) that decides what to trash,
+what to keep, what to unsubscribe from, and what to relabel — then issues the API
+calls. Everything goes to Trash (recoverable for 30 days), never permanent delete.
 
-1. **Be reversible.** All deletions go to Trash (Gmail retains 30 days). No
-   `messages.delete`. Ever.
-2. **Be cheap.** ~$100–$300 one-time LLM cost on a 200K mailbox, free thereafter.
-3. **Be safe.** Never feed email bodies to a model — only headers and subject.
-   Bodies are untrusted user content that can contain prompt-injection payloads.
-4. **Be resumable.** A 2-hour fetch shouldn't have to start over because Wi-Fi
-   blipped at minute 90.
-5. **Be honest about what it can't do.** RFC 8058 one-click unsubscribe works
-   for ~30% of senders. The rest need a human or a browser bot, and we say so.
-
-### Non-goals
-
-- Real-time inbox monitoring. This is a batch tool you run when you want to
-  clean up, not a daemon.
-- Spam *detection*. Gmail's classifier is already excellent; we trust the
-  `Spam`/`Promotions`/`Updates`/`Social` buckets it produces and route from there.
-- Replying or composing. Scope is strictly read-headers and modify-labels.
-- Permanent deletion. We always Trash, never `expunge`.
+> **Note:** Classification runs inside a Claude Code session, not via the Anthropic
+> SDK. No separate API key is needed. Your existing Claude Pro / Max / Team plan
+> covers it.
 
 ---
 
-## Architecture
+## Quickstart
 
-### The pipeline
+Get to your first successful `pnpm preflight` in under 15 minutes.
+
+### Prerequisites
+
+| Tool | Version | Install |
+|------|---------|---------|
+| Node.js | ≥ 22 | `brew install node` |
+| pnpm | ≥ 9 | `brew install pnpm` |
+| gcloud CLI | any | `brew install --cask google-cloud-sdk` |
+| Claude Code | any | https://claude.ai/code |
+| GCP project with active billing | — | [GCP Setup](#gcp-setup) |
+
+> **Note:** "Active billing" does not mean you will be charged. Gmail API is free at
+> this scale. Google requires a billing account to be linked before any API quota can
+> be authorized. A free-trial account with the $300 credit qualifies.
+
+### Step 1 — Clone and install
+
+```bash
+git clone https://github.com/YOUR_GITHUB_USERNAME/claude-gmail-cleaner.git
+cd claude-gmail-cleaner
+pnpm install
+```
+
+### Step 2 — GCP and OAuth setup
+
+Follow the [GCP Setup](#gcp-setup) section (15–20 minutes, one-time). It covers:
+creating a GCP project, linking billing, enabling the Gmail API, configuring an OAuth
+consent screen, creating a Desktop-app OAuth client, and running `gws auth setup` +
+`gws auth login`.
+
+### Step 3 — Configure and verify
+
+```bash
+cp .env.example .env
+# Optionally edit .env to set CLEANUP_MAX_MESSAGES=2000 while iterating
+
+pnpm preflight
+```
+
+A successful `pnpm preflight` prints your mailbox total and confirms header-only reads
+are working. If you see `PERMISSION_DENIED`, see [Troubleshooting](#troubleshooting).
+
+### Step 4 — Baseline counts
+
+```bash
+pnpm count      # per-year message counts → out/count.json
+pnpm buckets    # Gmail-category breakdown → out/buckets.json
+```
+
+Then open a Claude Code session at the project root and say **"analyze baseline"**.
+A Haiku sub-agent reads both files and writes `out/baseline_analysis.md` with a
+recommended year range and a ready-to-paste fetch query.
+
+### Step 5 — Fetch headers
+
+```bash
+pnpm fetch                        # all mail, default 10-year lookback
+pnpm fetch "category:promotions"  # or narrow by Gmail search query
+pnpm fetch --years 2025           # or narrow by year
+```
+
+This writes `out/headers.jsonl`. Fetching 200K headers takes roughly 2 hours at the
+default concurrency of 8. The command is resumable — interrupted runs pick up where
+they left off.
+
+### Step 6 — Classify (Claude Code session)
+
+Open a Claude Code session at the project root and say **"classify"**.
+
+The orchestrator reads `out/headers.jsonl` in 1,000-message batches and drives the
+three-tier pipeline (see [How it works](#how-it-works)). Results stream to
+`out/decisions.jsonl`. Leave the session open — classification pauses if you close
+the terminal.
+
+### Step 7 — Plan and execute
+
+```bash
+pnpm plan                  # produce out/cleanup_plan.md — review this before proceeding
+pnpm execute --test        # trash the first 100, then prompt yes/no
+pnpm execute --confirm     # full run, no further prompt
+```
+
+Always start with `--test`. After the first 100 are trashed, open Gmail and confirm
+the results look right before typing `yes`. Everything that goes to Trash is
+recoverable for 30 days.
+
+---
+
+## How it works
+
+### Pipeline
 
 ```
-                              GMAIL API (gws CLI)
-                                     │
-                                     │  format=metadata, metadataHeaders=[...]
-                                     │  ↳ enforced at API level — body never leaves Google
-                                     ▼
-                          ┌─────────────────────┐
-                          │  Header Fetcher     │   resumable, 8-way concurrent
-                          │  → headers.jsonl    │   streams to disk, no memory bloat
-                          └──────────┬──────────┘
-                                     │
-                                     ▼
-                          ┌─────────────────────┐
-                          │  Bucket Router      │   free, deterministic
-                          │  Inbox / Promotions │
-                          │  Social / Updates   │
-                          └──────────┬──────────┘
-                                     │
-                                     ▼
-                ┌──────────────────────────────────────────┐
-                │  HAIKU BASKET     drains at 1,000        │
-                │  10 parallel Claude Haiku 4.5 agents     │
-                │  Output: trash / keep / unsub / unclear  │
-                └──────────┬───────────────────┬───────────┘
-                  trash    │  keep │ unsub     │ unclear
-                           ▼       ▼   ▼       ▼
-                       [Gmail batchModify]  ┌──────────────────────────────┐
-                                            │  SONNET BASKET   drains at 500 │
-                                            │  10 parallel Sonnet 4.6        │
-                                            │  drop/keep/label/organize/unsub│
-                                            └──────────┬───────────┬─────────┘
-                                                       │           │ unclear
-                                                       ▼           ▼
-                                                 [actions]   ┌──────────────────────┐
-                                                             │  OPUS BASKET  drains @ 100│
-                                                             │  4 parallel Opus 4.7      │
-                                                             │  Final arbiter            │
-                                                             └─────┬─────────┬───────────┘
-                                                                   │         │ unclear
-                                                                   ▼         ▼
-                                                             [actions]  needs_review.csv
+                          GMAIL API (gws CLI)
+                                 │
+                                 │  format=metadata, metadataHeaders=[...]
+                                 │  body never leaves Google servers
+                                 ▼
+                      ┌─────────────────────┐
+                      │  Header Fetcher     │  resumable, 8-way concurrent
+                      │  → headers.jsonl    │  streams to disk, no memory bloat
+                      └──────────┬──────────┘
+                                 │
+                                 ▼
+                      ┌─────────────────────┐
+                      │  Bucket Router      │  free, deterministic
+                      │  Inbox / Promotions │
+                      │  Social / Updates   │
+                      └──────────┬──────────┘
+                                 │
+                                 ▼
+              ┌──────────────────────────────────────┐
+              │  HAIKU BASKET     drains at 1,000    │
+              │  10 parallel Claude Haiku sub-agents  │
+              │  trash / keep / unsub / unclear       │
+              └──────────┬───────────────────┬────────┘
+               clear     │                   │ unclear
+                         ▼                   ▼
+              [Gmail batchModify]   ┌─────────────────────────────┐
+                                   │  SONNET BASKET  drains at 500│
+                                   │  10 parallel Sonnet agents   │
+                                   │  drop/keep/label/unsub/unclear│
+                                   └──────────┬──────────┬────────┘
+                                    clear     │          │ unclear
+                                              ▼          ▼
+                                       [actions]  ┌─────────────────────────┐
+                                                  │  OPUS BASKET  drains at 100│
+                                                  │  4 parallel Opus agents   │
+                                                  │  final ruling             │
+                                                  └──────────┬────────┬───────┘
+                                                   clear     │        │ unclear
+                                                             ▼        ▼
+                                                      [actions]  needs_review.csv
 ```
 
 ### Action types
 
-Every classifier tier emits one of:
-
-| Action | What we do | Reversible? |
-|---|---|---|
-| `trash` | `batchModify addLabelIds=["TRASH"]` | Yes — Trash retains 30 days |
-| `keep` | No-op (leave in current state) | n/a |
-| `unsubscribe` | RFC 8058 one-click POST to `List-Unsubscribe` URL, *then* trash | Partial — unsub is sticky |
-| `label:<name>` | Apply or create label, leave in Inbox | Yes — relabel anytime |
-| `archive` | Remove `INBOX` label, keep elsewhere | Yes |
+| Action | What happens | Reversible? |
+|--------|-------------|-------------|
+| `trash` | `batchModify addLabelIds=["TRASH"]` | Yes — 30-day Gmail Trash |
+| `keep` | No-op | n/a |
+| `unsubscribe` | RFC 8058 one-click POST, then trash | Partial — unsub is sticky |
+| `label:<name>` | Apply or create label, leave in Inbox | Yes |
+| `archive` | Remove `INBOX` label | Yes |
 | `unclear` | Escalate to next tier | n/a |
 
 ### Queue semantics
 
-- **Batches drain at thresholds**, not on a timer. A basket waits until it has
-  enough work to keep all parallel agents busy.
-- **Backpressure**: if Sonnet falls behind, Haiku pauses. We never let an
-  ambiguous-message queue grow unboundedly.
-- **Failure isolation**: an LLM call that errors out marks its messages as
-  `unclear` and they escalate naturally. No retry storms.
-- **Idempotent**: every message ID is recorded in `out/decisions.jsonl` with
-  tier and outcome. Re-running skips already-decided IDs.
+- **Drain thresholds, not timers.** A basket waits until it has enough work to keep
+  all its parallel agents busy (1,000 / 500 / 100).
+- **Backpressure.** If Sonnet falls behind, Haiku pauses — no unbounded queue growth.
+- **Failure isolation.** An LLM call that errors marks its messages as `unclear` and
+  they escalate naturally. No retry storms.
+- **Idempotent.** Every message ID is recorded in `out/decisions.jsonl`. Re-running
+  skips already-decided IDs.
 
 ---
 
 ## Safety model
 
-This section describes the load-bearing safety properties of the tool. If you
-skim anything in this README, skim this.
+### 1. Header-only is enforced at the API, not just in code
 
-### 1. Header-only is enforced at the API, not just our code
+Every Gmail read uses `format=metadata` with an explicit `metadataHeaders` allowlist.
+Gmail's server never returns the body. Even a bug in this code that requested the body
+would be rejected at the API level.
 
-Every Gmail read uses `format=metadata` with an explicit `metadataHeaders=[...]`
-allowlist. Gmail's server never returns the body. Even if our code had a bug
-that asked for the body, Gmail would reject the request.
-
-The full list of headers we request:
-
+Headers requested:
 ```
 From, Subject, Date, List-Unsubscribe, List-Unsubscribe-Post,
 Precedence, X-Mailer, Reply-To, Authentication-Results
@@ -172,99 +238,73 @@ Precedence, X-Mailer, Reply-To, Authentication-Results
 
 ### 2. Body content never enters an LLM prompt
 
-LLM tier prompts contain: sender email, sender domain, subject, date, plus
-boolean flags derived from headers (has-list-unsubscribe, no-reply, etc.). No
-snippets. No body. No attachment names.
+LLM prompts contain only: sender address, sender domain, subject, date, and boolean
+flags derived from headers (has-list-unsubscribe, no-reply, etc.). No snippets. No
+body. No attachment names.
 
 ### 3. Destructive operations require an approval gate
 
-Until you explicitly approve `out/cleanup_plan.md`, no `batchModify` runs.
-After approval, all moves go to Trash (Gmail's recoverable bucket) — never
-`messages.delete` (permanent).
+`out/cleanup_plan.md` must be reviewed before any `batchModify` call runs. All moves
+go to Trash — never `messages.delete` (permanent).
+
+> **Warning:** Unsubscribe POSTs via RFC 8058 are not reversible at the protocol
+> level. If you change your mind you will need to re-subscribe via the sender's
+> website. Trash moves are always recoverable for 30 days.
 
 ### 4. OAuth scope discipline
 
-`gws auth login` requests `gmail.modify`, *not* `gmail.readonly` or `mail.google.com`.
-This means:
+`gws auth login` requests `gmail.modify` — not `gmail.readonly` or `mail.google.com`.
+This scope permits reading metadata and moving messages between labels (including
+Trash). It cannot read message bodies, and it cannot permanently delete anything.
 
-- We can read metadata and move messages between labels (including Trash).
-- We cannot read message bodies via the OAuth scope at all.
-- We cannot permanently delete messages.
+### 5. `--test` mode
 
-### 5. Reversibility checklist
-
-- Trash retains messages for 30 days — recover via Gmail UI.
-- Label additions/removals are reversed by removing/adding the label.
-- Unsubscribe POSTs are *not* reversible at the protocol level. If you change
-  your mind, you'll need to manually re-subscribe via the sender's website.
+`pnpm execute --test` trashes the first 100 candidates and then prompts `yes/no`
+before continuing. Always start here on a fresh dataset. Abort at `no`; the 100
+already trashed are still recoverable for 30 days.
 
 ---
 
-## Cost estimate
+## Cost
 
 ### Google APIs
 
-**Free at this scale.** Gmail API daily quota is 1 billion quota units. A full
-200K-message mailbox scan + cleanup uses approximately 250K units, well under
-0.05% of the daily ceiling.
+Free at this scale. Gmail API daily quota is 1 billion quota units. A full 200K
+message scan and cleanup uses approximately 250K units — under 0.05% of the daily
+ceiling.
 
 ### Claude (LLM tiers)
 
-Classification runs inside a **Claude Code session** via the Agent tool —
-not via the Anthropic API SDK. There is no separate API key to manage and no
-per-token bill outside your existing Claude Code plan. Usage counts against
-your plan's monthly quota (Pro, Max, Team, etc.).
+Classification runs inside a **Claude Code session** via the Agent tool — not via the
+Anthropic SDK. There is no separate API key and no per-token bill outside your
+existing Claude Code plan (Pro, Max, Team, etc.).
 
-The orchestrator (Claude, in your session) reads `out/headers.jsonl` and
-dispatches parallel sub-Agents with `model: "haiku" | "sonnet" | "opus"` —
-ten Haiku in one wave, ten Sonnet when their basket fills, four Opus when
-theirs does — all via tool calls in a single message, executed in parallel,
-results streamed back to disk.
+The session orchestrator reads `out/headers.jsonl` and dispatches sub-agents with
+`model: "haiku" | "sonnet" | "opus"` — ten Haiku in one batch, ten Sonnet when their
+basket fills, four Opus when theirs does — all as parallel tool calls in a single
+message, results streamed back to disk.
 
-**Tradeoff**: classification only progresses while a Claude Code session is
-open and attended. Closing the terminal mid-run pauses the pipeline. For a
-one-shot inbox cleanup, that's fine — it's a few hours of attended work.
-Heavy users on metered plans should consult their plan's usage caps before
-running against a very large mailbox.
+**Rough estimate on a 200K mailbox:** $100–$300 equivalent plan usage, one-time.
+Free thereafter (fetch is cached; re-classify by editing prompts in `src/prompts/`).
 
----
-
-## Prerequisites
-
-| Tool | Why | Install |
-|---|---|---|
-| Node.js ≥ 22 | Runtime | `brew install node` |
-| pnpm ≥ 9 | Package manager | `brew install pnpm` |
-| gcloud CLI | OAuth bootstrap | `brew install --cask google-cloud-sdk` |
-| A Google account | The mailbox to clean | — |
-| A GCP project with an active billing account | Service Usage API requires it | `gcloud projects create ...` |
-| Claude Code session | Runs the LLM classification tiers as parallel Agents | https://claude.com/code |
-
-> **Note**: "Active billing" doesn't mean "you'll pay" — Gmail API is free.
-> But Google requires an open billing account *exist* to authorize Service Usage
-> calls. Free trial credit ($300) covers this comfortably.
+**Attended execution.** Classification only progresses while a Claude Code session is
+open. Closing the terminal pauses the pipeline; reopening it resumes from where
+`out/decisions.jsonl` left off.
 
 ---
 
 ## GCP Setup
 
-You need a GCP project with OAuth credentials so the tool can call the Gmail
-API on your behalf. The Gmail API itself is free, but Google requires an active
-billing account before it will authorize any API consumption. You will not be
-charged for normal use of this tool.
-
-> **Time estimate:** 15–20 minutes, one-time.
+One-time, 15–20 minutes. Do this before `pnpm preflight`.
 
 ### 1. Install the gcloud CLI
 
 **macOS (Homebrew):**
-
 ```bash
 brew install --cask google-cloud-sdk
 ```
 
 **Linux (apt):**
-
 ```bash
 sudo apt-get install apt-transport-https ca-certificates gnupg
 echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
@@ -282,79 +322,57 @@ Verify: `gcloud --version`
 gcloud auth login
 ```
 
-This opens a browser window. Sign in with the Google account that owns the
-Gmail inbox you want to clean.
+Sign in with the Google account that owns the Gmail inbox you want to clean.
 
 ### 3. Create a GCP project
 
 ```bash
 gcloud projects create YOUR_PROJECT_ID --name="Gmail Cleaner"
-```
-
-Pick any globally unique `YOUR_PROJECT_ID` (e.g. `gmail-cleanup-2026`). You
-will use it in every subsequent command, so choose something short.
-
-### 4. Set it as the active project
-
-```bash
 gcloud config set project YOUR_PROJECT_ID
 ```
 
-### 5. Link a billing account
+Pick a globally unique `YOUR_PROJECT_ID` (e.g. `gmail-cleanup-2026`). You will use it
+in every subsequent command.
 
-Open the billing console and attach an active billing account to your project:
+### 4. Link a billing account
 
 ```
 https://console.cloud.google.com/billing/linkedaccount?project=YOUR_PROJECT_ID
 ```
 
-> **Why is billing required if the API is free?** Google's Service Usage API —
-> which governs whether a project is allowed to consume any Google service —
-> refuses to authorize API calls unless the project has an open billing
-> account. The Gmail API costs $0 at this scale, but the billing account must
-> exist and be **active** (not suspended, not pending). A free-trial account
-> with the $300 credit is fine.
+> **Warning:** Google's Service Usage API refuses to authorize any API consumption
+> unless the project has an active billing account (not suspended, not pending). The
+> Gmail API costs $0 at this scale, but the billing account must exist.
 >
-> **Propagation delay:** After linking billing, wait 2–3 minutes before
-> running the next step. The Service Usage Consumer role can take a moment to
-> propagate and you may see a `PERMISSION_DENIED` if you proceed immediately.
+> After linking billing, wait 2–3 minutes before proceeding. The Service Usage
+> Consumer role can take a moment to propagate; you may see `PERMISSION_DENIED` if
+> you proceed immediately.
 
-### 6. Enable the Gmail API
+### 5. Enable the Gmail API
 
 ```bash
 gcloud services enable gmail.googleapis.com --project=YOUR_PROJECT_ID
 ```
 
-### 7. Configure the OAuth consent screen
-
-Open the consent screen configuration:
+### 6. Configure the OAuth consent screen
 
 ```
 https://console.cloud.google.com/apis/credentials/consent?project=YOUR_PROJECT_ID
 ```
 
-Fill in the form:
-
 - **User type:** External
-- **App name:** anything descriptive (e.g. `Gmail Cleaner`)
-- **User support email:** your-email@gmail.com
-- **Developer contact email:** your-email@gmail.com
+- **App name:** anything (e.g. `Gmail Cleaner`)
+- **User support email / Developer contact:** your-email@example.com
 - Leave all other fields blank and click **Save and Continue** through Scopes.
-- **Publishing status:** leave as **Testing** — this avoids a Google
-  verification review that can take weeks.
-- Under **Test users**, click **Add Users** and add your own Gmail address.
-  Only listed test users can complete the OAuth flow while the app is in
-  Testing mode.
+- **Publishing status:** leave as **Testing** — avoids a Google verification review.
+- Under **Test users**, add your own Gmail address. Only listed test users can complete
+  the OAuth flow while the app is in Testing mode.
 
-> **"App not verified" warning:** When you complete the browser consent flow
-> in step 10, Google will show a warning screen. This is expected for any app
-> in Testing mode. Click **Advanced** → **Go to [App name] (unsafe)** to
-> proceed. The warning disappears once the app is published, but you do not
-> need to publish it for personal use.
+> **Note:** During the browser consent flow (step 8), Google will show an "App not
+> verified" warning. This is expected for apps in Testing mode. Click **Advanced →
+> Go to [App name] (unsafe)** to proceed.
 
-### 8. Create OAuth client credentials
-
-Open the credentials page:
+### 7. Create OAuth client credentials
 
 ```
 https://console.cloud.google.com/apis/credentials?project=YOUR_PROJECT_ID
@@ -362,231 +380,131 @@ https://console.cloud.google.com/apis/credentials?project=YOUR_PROJECT_ID
 
 Click **Create Credentials → OAuth client ID**:
 
-- **Application type:** Desktop app ← this is critical
+- **Application type:** Desktop app — this is required
 - **Name:** anything (e.g. `gmail-cleaner-desktop`)
 - Click **Create**
 
-Copy your **Client ID** and **Client Secret** from the dialog that appears.
+Copy the **Client ID** and **Client Secret** from the dialog.
 
-> **Desktop app is required.** If you choose Web application instead, the
-> OAuth redirect flow will fail when `gws auth login` tries to receive the
-> callback on `localhost`. Desktop app clients handle the local redirect
-> correctly.
+> **Note:** Desktop app is required. Choosing Web application breaks the OAuth
+> redirect flow — `gws auth login` expects a local redirect that only Desktop app
+> clients handle correctly.
 
-### 9. Hand the credentials to `gws auth setup`
+### 8. Hand credentials to `gws auth setup`
 
 ```bash
 ./node_modules/.bin/gws auth setup
 ```
 
-When prompted, paste the **Client ID** then the **Client Secret** you copied
-in the previous step.
+Paste the Client ID then the Client Secret when prompted.
 
-### 10. Complete the browser consent flow
+### 9. Complete the browser consent flow
 
 ```bash
 ./node_modules/.bin/gws auth login
 ```
 
-A browser window opens, you sign in, grant the `gmail.modify` scope, and the
-CLI writes an encrypted refresh token to `~/.config/gws/credentials.enc`.
-You will not need to repeat this step unless you revoke the token.
+A browser window opens, you sign in, grant `gmail.modify`, and the CLI writes an
+encrypted refresh token to `~/.config/gws/credentials.enc`. You will not need to
+repeat this unless you revoke the token.
 
 ---
 
-## Setup
+## Configuration
 
-### One-time
+All variables are optional. Copy `.env.example` to `.env` and uncomment what you need.
 
-```bash
-# 1. Clone + install
-git clone https://github.com/YOUR_GITHUB_USERNAME/claude-gmail-cleaner.git
-cd claude-gmail-cleaner
-pnpm install                               # installs gws CLI + tsx into node_modules
-
-# 2. Complete all steps in GCP Setup above, then verify auth works:
-pnpm preflight
-
-# 3. Env vars
-cp .env.example .env
-# Edit .env:
-#   GOOGLE_WORKSPACE_PROJECT_ID=YOUR_PROJECT_ID  (optional quota-project override)
-#   CLEANUP_MAX_MESSAGES=2000                    (optional cap while iterating)
-```
-
-A successful `pnpm preflight` prints your mailbox total and confirms reads are
-in metadata mode.
-
-### Per-run
-
-Nothing. Tokens are encrypted at `~/.config/gws/credentials.enc` and refresh
-automatically.
+| Variable | Used by | Default | Notes |
+|----------|---------|---------|-------|
+| `GOOGLE_WORKSPACE_PROJECT_ID` | gws (all commands) | OAuth client's project | Override if primary project has billing issues |
+| `GOOGLE_WORKSPACE_CLI_SANITIZE_TEMPLATE` | gws Model Armor | disabled | Requires Model Armor API enabled |
+| `GOOGLE_WORKSPACE_CLI_SANITIZE_MODE` | gws Model Armor | `warn` | `warn` or `block` |
+| `CLEANUP_MAX_MESSAGES` | `pnpm fetch` | unlimited | Useful cap while iterating (e.g. `2000`) |
+| `CLEANUP_CONCURRENCY` | `pnpm fetch` | `8` | Concurrent gws requests |
+| `CLEANUP_YEAR_LOOKBACK` | `--years` default | `10` | Years back when `--years` is omitted |
+| `CLEANUP_SECONDS_PER_BATCH` | `pnpm plan` ETA | `2` | Wall-clock estimate per batch |
+| `PLAN_TOP_N` | `pnpm plan` | `25` | Rows in cleanup_plan.md sender tables |
 
 ---
 
-## Usage
-
-The pipeline mixes Node commands (deterministic I/O) with Claude orchestration
-(LLM classification). Each step is resumable; each writes to `out/` and
-`log_results/`.
-
-### Step 1 — Node-side preparation
-
-```bash
-pnpm preflight                              # verify install, auth, env
-pnpm labels                                 # list user-defined Gmail labels
-pnpm cleanup labels-delete LABEL_ID [...]   # delete one or more labels by ID
-
-pnpm count                                  # per-year message counts (default: last 10y)
-pnpm buckets                                # Gmail category counts (promotions/social/updates/forums)
-pnpm fetch                                  # fetch headers (default query: in:anywhere -in:chats)
-pnpm fetch "category:promotions"            # or scope by Gmail search query
-```
-
-`--years` works the same way on **every** read-side command (`count`, `buckets`,
-`fetch`) and every action-side command (`plan`, `execute`). Accepted value
-forms are listed in the [`--years` reference](#--years-value-forms) below.
-Examples (the same value works on any of these commands):
-
-```bash
-pnpm count   --years 5            # last 5 years
-pnpm count   --years 2025         # just 2025
-pnpm count   --years 2018-2026    # explicit range
-pnpm buckets --years 2025         # category counts inside 2025
-pnpm buckets --years 2018-2026    # category counts across a range
-pnpm fetch   --years 2025                       # fetch one year
-pnpm fetch   "category:promotions" --years 5    # query + range
-```
-
-After `pnpm count` and/or `pnpm buckets`, in a Claude Code session say
-**"analyze baseline"** — a Haiku sub-agent (prompt at
-`src/prompts/baseline-analyze.md`) reads `out/count.json` and
-`out/buckets.json` (whichever exist) and writes `out/baseline_analysis.md`
-with a recommended first-sweep year range, category filter, and a
-ready-to-paste fetch query.
-
-After `pnpm fetch`, `out/headers.jsonl` contains every message's headers,
-ready for classification.
-
-### Step 2 — Claude-side classification (in a Claude Code session)
-
-Open a Claude Code session at the project root and say `classify`. The
-orchestrator will:
-
-1. Read `out/headers.jsonl` in batches of 1,000
-2. Spawn **10 Haiku sub-Agents in parallel** (one tool message, ten calls)
-3. Collect their JSON verdicts → write `out/decisions.jsonl`
-4. When 500 "unclear" verdicts accumulate, spawn **10 Sonnet sub-Agents**
-5. When 100 Sonnet-unclear accumulate, spawn **4 Opus sub-Agents**
-6. Anything Opus still can't decide goes to `out/needs_review.csv`
-
-Tier system prompts live in `src/prompts/{haiku,sonnet,opus}.md` — edit them
-to tune behavior without re-fetching headers.
-
-### Step 3 — Node-side execution
-
-```bash
-pnpm plan                # produce out/cleanup_plan.md from decisions.jsonl
-# (review the plan)
-pnpm execute --test      # apply first 100 actions, then prompt yes/no for the rest
-pnpm execute --confirm   # full run, no prompt
-```
-
-`pnpm execute` refuses to run without `--test` or `--confirm`. Always start
-with `--test` on a fresh dataset: it trashes the first 100 candidates, then
-asks you to review your Trash folder before continuing. Type `yes` to
-proceed with the remainder, `no` to abort. Trash is recoverable for 30 days
-either way.
-
-### Iteration loop
-
-Re-classify a cached dataset cheaply (no Gmail calls) by tweaking the prompts
-in `src/prompts/` and re-running classification in your Claude Code session.
-
-This is the design point of separating fetch from classify: header fetching
-costs Gmail quota; classification costs Claude usage. Keep them independent
-so prompt iteration is free of Gmail calls.
-
-### Command reference
-
-All Node-side commands. Anything labeled **Claude session** is something you
-say to Claude inside a `claude` session at the project root.
+## Command reference
 
 | Command | Purpose | `--years`? |
-|---|---|:---:|
+|---------|---------|:----------:|
 | `pnpm preflight` | Verify gws install, auth, env vars, mailbox reachability. Run first. | — |
 | `pnpm labels` | List user-defined Gmail labels with message counts. | — |
-| `pnpm cleanup labels-delete <id> [id ...]` | Delete the named labels (messages keep their other labels). | — |
+| `pnpm cleanup labels-delete <id> [id ...]` | Delete labels by ID (messages keep their other labels). | — |
 | `pnpm count` | Per-year message counts. Writes `out/count.json`. | ✓ |
-| `pnpm buckets` | Counts the four Gmail categories. Writes `out/buckets.json`. | ✓ |
-| **Claude session:** `analyze baseline` | Haiku sub-agent reads `out/count.json` and `out/buckets.json` → writes `out/baseline_analysis.md`. Prompt: `src/prompts/baseline-analyze.md`. | — |
-| `pnpm fetch [query]` | Fetch headers (resumable) → `out/headers.jsonl`. Default query: `in:anywhere -in:chats`. | ✓ |
-| **Claude session:** `classify` | Drive the Haiku → Sonnet → Opus pipeline → `out/decisions.jsonl`. Tier prompts under `src/prompts/{haiku,sonnet,opus}.md`. | — |
+| `pnpm buckets` | Gmail-category counts (promotions/social/updates/forums). Writes `out/buckets.json`. | ✓ |
+| `pnpm fetch [query]` | Fetch headers into `out/headers.jsonl` (resumable). Default query: `in:anywhere -in:chats`. | ✓ |
 | `pnpm plan` | Roll up `out/decisions.jsonl` into `out/cleanup_plan.md`. | ✓ |
-| `pnpm execute --test` | Trash the first 100 candidates, prompt yes/no for the rest. | ✓ |
-| `pnpm execute --confirm` | Full destructive run, no prompt. Refuses without either flag. | ✓ |
+| `pnpm execute --test` | Trash first 100 candidates, prompt yes/no for the rest. | ✓ |
+| `pnpm execute --confirm` | Full run, no prompt. Refuses without either flag. | ✓ |
 
-`--years` behavior is identical across every checked command above — same
-parser, same value forms (see [`--years` value forms](#--years-value-forms)).
-`plan` and `execute` resolve dates from `out/headers.jsonl`, so `pnpm fetch`
-must have run before they can filter by year.
+**Claude Code session commands** (say these inside a `claude` session at the project root):
 
-### `--years` value forms
+| Phrase | What happens |
+|--------|-------------|
+| `analyze baseline` | Haiku sub-agent reads `out/count.json` + `out/buckets.json`, writes `out/baseline_analysis.md` with a recommended fetch query. |
+| `classify` | Drives the Haiku → Sonnet → Opus pipeline against `out/headers.jsonl`, writes `out/decisions.jsonl`. |
 
-The flag accepts five forms. The same value parses identically on every command
-that supports `--years` (`count`, `buckets`, `fetch`, `plan`, `execute`).
+Tier system prompts live in `src/prompts/{haiku,sonnet,opus}.md`. Edit them to tune
+behavior without re-fetching headers.
 
-| Form | Meaning |
-|---|---|
-| _omitted_ | Default 10-year lookback (override with env `CLEANUP_YEAR_LOOKBACK`). |
-| `5` | Last 5 years. Any 1–3 digit number → lookback. |
-| `5year` / `10years` | Last N years, explicit unit (any magnitude). |
-| `2025` | Just the year 2025. Any 4-digit number → single-year shorthand. |
-| `2010-2026` | Inclusive range. |
-| `2026-2010` | Same range — direction is auto-sorted, so finger memory doesn't matter. |
+---
 
-Internally these are all parsed to `{ fromYear, toYear }`. On `count` /
-`buckets` / `fetch` the range becomes part of the Gmail query
-(`after:Y1/01/01 before:Y2+1/01/01`). On `plan` / `execute` it filters
-decisions against `out/headers.jsonl` dates.
+## `--years` reference
 
-Environment variables that affect commands (all optional, see `.env.example`):
+The `--years` flag is accepted by `count`, `buckets`, `fetch`, `plan`, and `execute`.
+The same value parses identically on every command.
 
-| Variable | Used by | Default |
-|---|---|---|
-| `GOOGLE_WORKSPACE_PROJECT_ID` | gws (all commands) | OAuth client's own project |
-| `GOOGLE_WORKSPACE_CLI_SANITIZE_TEMPLATE` | gws Model Armor | disabled |
-| `GOOGLE_WORKSPACE_CLI_SANITIZE_MODE` | gws Model Armor | `warn` |
-| `CLEANUP_MAX_MESSAGES` | `pnpm fetch` | unlimited |
-| `CLEANUP_CONCURRENCY` | `pnpm fetch` | `8` |
-| `CLEANUP_YEAR_LOOKBACK` | `pnpm count` and `--years` filters (when omitted) | `10` |
-| `CLEANUP_SECONDS_PER_BATCH` | `pnpm plan` ETA | `2` |
-| `PLAN_TOP_N` | `pnpm plan` table size | `25` |
+| Form | Meaning | Example |
+|------|---------|---------|
+| omitted | Default lookback (env `CLEANUP_YEAR_LOOKBACK`, default 10 years) | `pnpm count` |
+| `N` (1–3 digits) | Last N years | `--years 5` |
+| `Nyear` / `Nyears` | Last N years, explicit unit (any magnitude) | `--years 10years` |
+| `YYYY` (4 digits) | Single calendar year | `--years 2025` |
+| `YYYY-YYYY` | Inclusive range, auto-sorted (either direction) | `--years 2010-2026` |
+
+Examples:
+
+```bash
+pnpm count   --years 5                       # last 5 years
+pnpm count   --years 2025                    # just 2025
+pnpm count   --years 2018-2026               # explicit range
+pnpm buckets --years 2025                    # category counts for 2025
+pnpm fetch   --years 2025                    # fetch one year's headers
+pnpm fetch   "category:promotions" --years 5 # query + lookback combined
+pnpm execute --test --years 2018-2024        # test-trash a year slice
+```
+
+Internally, values resolve to `{ fromYear, toYear }`. On `count` / `buckets` / `fetch`
+the range becomes a Gmail query clause (`after:Y1/01/01 before:Y2+1/01/01`). On
+`plan` / `execute` it filters decisions against the dates in `out/headers.jsonl`.
 
 ---
 
 ## Outputs
 
-Two directories, two lifecycles:
-
 ### `out/` — working data (gitignored)
 
 Resumable artifacts. Re-running a command updates these in place.
 
-| File | Purpose |
-|---|---|
-| `count.json` | Per-year message counts (from `pnpm count`) |
-| `buckets.json` | Gmail-category counts (from `pnpm buckets`) |
-| `headers.jsonl` | One header record per line, resumable cache |
-| `decisions.jsonl` | Per-message: tier reached, action, model confidence |
-| `sender_index.csv` | Aggregated per-sender: count, signals, recommendation |
-| `cleanup_plan.md` | Human-readable approval document |
-| `needs_review.csv` | Senders Opus couldn't confidently classify |
+| File | Written by | Purpose |
+|------|-----------|---------|
+| `count.json` | `pnpm count` | Per-year message counts |
+| `buckets.json` | `pnpm buckets` | Gmail-category counts |
+| `baseline_analysis.md` | Claude session | Recommended sweep strategy |
+| `headers.jsonl` | `pnpm fetch` | One header record per message |
+| `decisions.jsonl` | Claude session `classify` | Per-message tier, action, confidence |
+| `sender_index.csv` | Claude session `classify` | Aggregated per-sender signals |
+| `cleanup_plan.md` | `pnpm plan` | Human-readable approval document |
+| `needs_review.csv` | Claude session `classify` | Senders Opus could not classify |
 
 ### `log_results/` — per-run history (gitignored)
 
-Append-only. One file per command invocation, ISO 8601 timestamped for free
-chronological sorting:
+Append-only. One Markdown file per command invocation, named
+`YYYY-MM-DDTHH-MM-SS_<cmd>.md` for free chronological sorting:
 
 ```
 log_results/
@@ -598,28 +516,8 @@ log_results/
 └── 2026-05-23T13-01-50_execute.md
 ```
 
-Each report contains the run's stat block — total messages touched, tier
-breakdown, Gmail quota used, wall-clock duration, any errors. Example:
-
-```markdown
-# Run report — `execute`
-
-**Started:**  2026-MM-DDTHH:MM:SSZ
-**Finished:** 2026-MM-DDTHH:MM:SSZ
-**Duration:** 14m 43s
-
-## Metadata
-- **Mode:** full
-- **Trashed:** 89,234
-- **Archived:** 1,805
-
-## Outcome
-| Action  | Messages |
-|---------|---------:|
-| Trash   |   89,234 |
-| Archive |    1,805 |
-| Label actions deferred | 412 |
-```
+Each report contains the run's stat block: messages touched, tier breakdown, Gmail
+quota used, wall-clock duration, and any errors.
 
 ---
 
@@ -627,107 +525,108 @@ breakdown, Gmail quota used, wall-clock duration, any errors. Example:
 
 ```
 claude-gmail-cleaner/
-├── README.md                       <- you are here
+├── README.md
+├── CLAUDE.md                   <- agent-facing project conventions
 ├── package.json
 ├── tsconfig.json
 ├── .env.example
 ├── src/
-│   ├── cli.ts                      <- subcommand dispatcher
-│   ├── preflight.ts                <- step 1
-│   ├── labels.ts                   <- step 2
-│   ├── baseline.ts                 <- step 3
-│   ├── fetch.ts                    <- step 4
-│   ├── classify.ts                 <- step 5 — orchestrates Haiku→Sonnet→Opus
-│   ├── plan.ts                     <- step 6
-│   ├── execute.ts                  <- step 7
+│   ├── cli.ts                  <- subcommand dispatcher
+│   ├── preflight.ts
+│   ├── labels.ts
+│   ├── baseline.ts
+│   ├── fetch.ts
+│   ├── classify.ts             <- Claude Code Agent orchestrator
+│   ├── plan.ts
+│   ├── execute.ts
 │   ├── prompts/
-│   │   ├── haiku.md                <- tier 1 system prompt (loaded into sub-Agents)
-│   │   ├── sonnet.md               <- tier 2 system prompt
-│   │   └── opus.md                 <- tier 3 system prompt
+│   │   ├── baseline-analyze.md
+│   │   ├── haiku.md            <- tier 1 system prompt
+│   │   ├── sonnet.md           <- tier 2 system prompt
+│   │   └── opus.md             <- tier 3 system prompt
 │   └── lib/
-│       ├── gws.ts                  <- Gmail API wrapper (header-only enforced)
-│       ├── unsubscribe.ts          <- RFC 8058 one-click POST handler
-│       ├── report.ts               <- per-run stat-report writer to log_results/
-│       └── types.ts                <- shared types
-├── out/                            <- gitignored — working data, resumable
-└── log_results/                    <- gitignored — append-only run history
+│       ├── gws.ts              <- Gmail API wrapper (header-only enforced)
+│       ├── years.ts            <- --years flag parser
+│       ├── unsubscribe.ts      <- RFC 8058 one-click POST handler
+│       ├── report.ts           <- per-run stat-report writer
+│       └── types.ts
+├── out/                        <- gitignored, working data
+└── log_results/                <- gitignored, append-only run history
 ```
 
 ---
 
 ## Tradeoffs & non-goals
 
-### Why pure LLM tiering instead of rules-first hybrid
+### Why pure LLM tiering instead of a rules-first hybrid
 
-A regex pre-filter could cheaply trash 70% of bulk before any LLM touches it.
-This tool deliberately omits that pre-filter and routes every message through
-the LLM tiers. The pure pipeline is easier to reason about, removes a class
-of false-positive risk (regex misclassifying a real message as bulk), and
-trusts LLM judgment uniformly. Users who want a faster, cheaper path can
-fork and add the pre-filter.
+A regex pre-filter could cheaply trash 70% of bulk before any LLM touches it. This
+tool deliberately omits that pre-filter and routes every message through the LLM
+tiers. The pure pipeline is easier to reason about, removes a class of false-positive
+risk (regex misclassifying legitimate mail as bulk), and trusts LLM judgment
+uniformly. Users who want a faster, cheaper path can fork and add the pre-filter.
 
-### Why Haiku / Sonnet / Opus over multi-vendor model routing
+### Why Haiku / Sonnet / Opus over multi-vendor routing
 
-Single-vendor dependency simplifies error handling, prompt caching, and
-billing reconciliation. Cross-vendor model routing adds operational complexity
-that doesn't pay off for a focused single-task tool.
+Single-vendor dependency simplifies error handling, prompt caching, and billing
+reconciliation. Cross-vendor model routing adds operational complexity that doesn't
+pay off for a focused single-task tool.
 
 ### Why we don't unsubscribe everything
 
-RFC 8058 one-click unsubscribe is supported by ~30% of bulk senders. The rest
-either:
-- Use the old RFC 2369 mailto form (we'd have to send mail back, easy to do
-  badly)
-- Require a browser visit to a hosted unsubscribe page (out of scope for a
-  header-only tool)
+RFC 8058 one-click unsubscribe is supported by roughly 30% of bulk senders. The rest
+either use the older RFC 2369 mailto form (requires sending mail back — easy to do
+badly) or require a browser visit to a hosted unsubscribe page (out of scope for a
+header-only tool). We do what is safe and reliable and trash the rest.
 
-We do what's safe and reliable, and we trash the rest. Future sender mail still
-goes to Trash via a filter we install.
+### Non-goals
 
-### Why not feature flags / staged rollout
-
-This is a single-operator, attended-execution tool — not a service. Production-
-style gating (canary slices, percentage rollouts, kill switches) would be
-ceremony. The approval gate is `cleanup_plan.md`; the safety net is
-`--test` mode + Gmail's 30-day Trash retention.
+- **Real-time monitoring.** This is a batch tool you run when you want to clean up,
+  not a daemon.
+- **Spam detection.** Gmail's classifier is already excellent — we trust its
+  Promotions / Updates / Social buckets and route from there.
+- **Permanent deletion.** Always Trash, never `expunge`.
+- **Replying or composing.** Scope is strictly read-headers and modify-labels.
 
 ---
 
 ## Roadmap
 
-This repo is the first of a planned **Google Debloater Suite**. Same patterns
+This repo is the first tool in a planned **Google Debloater Suite**. The same patterns
 (header-only safety, tiered LLM routing, gws CLI, GCP project) get reused for:
 
 | Tool | Status | Notes |
-|---|---|---|
+|------|--------|-------|
 | `claude-gmail-cleaner` | **In progress** (this repo) | |
 | `claude-photos-debloater` | Planned | Photos API removed delete in 2025 — needs Takeout flow or browser automation |
-| `claude-drive-debloater` | Planned | Mass file/folder cleanup with size+age scoring |
+| `claude-drive-debloater` | Planned | Mass file/folder cleanup with size + age scoring |
 | `claude-calendar-debloater` | Planned | Old recurring events, spam invites |
-| `claude-contacts-deduper` | Planned | Dedupe the inevitable duplicate-contact sprawl |
+| `claude-contacts-deduper` | Planned | Deduplicate the inevitable contact sprawl |
 
 ---
 
 ## Troubleshooting
 
-### `PERMISSION_DENIED` / `Caller does not have required permission to use project`
+### `PERMISSION_DENIED` / `Caller does not have required permission`
 
-Your GCP project is missing an active billing account, or the
-`Service Usage Consumer` role hasn't propagated yet (can take up to ~15 minutes
-on personal Google accounts). Two ways to fix:
+Your GCP project is missing an active billing account, or the Service Usage Consumer
+role hasn't propagated yet (can take up to 15 minutes on personal Google accounts).
 
-1. Open https://console.cloud.google.com/billing and confirm an active
-   billing account is linked to your project. Then wait ~5 minutes and retry.
+1. Open `https://console.cloud.google.com/billing` and confirm an active billing
+   account is linked. Wait 2–5 minutes, then retry.
 2. As a workaround, route quota to a different project you own:
    ```bash
-   echo "GOOGLE_WORKSPACE_PROJECT_ID=your-other-project-id" >> .env
+   # in .env
+   GOOGLE_WORKSPACE_PROJECT_ID=your-other-project-id
+   ```
+   ```bash
    pnpm preflight
    ```
-   You only need Gmail API enabled on the override project.
+   You only need the Gmail API enabled on the override project.
 
 ### `accessNotConfigured` / `API has not been used in project`
 
-Gmail API isn't enabled on the project gws is routing quota to. Enable it:
+Gmail API is not enabled on the project gws is routing quota to:
 
 ```bash
 gcloud services enable gmail.googleapis.com --project=YOUR_PROJECT_ID
@@ -735,19 +634,21 @@ gcloud services enable gmail.googleapis.com --project=YOUR_PROJECT_ID
 
 ### `Access blocked: ... has not completed the Google verification process`
 
-Your OAuth consent screen is in Testing mode (correct for personal use) but
-your Gmail address isn't on the Test Users list. Add it at
+Your consent screen is in Testing mode (correct for personal use) but your Gmail
+address is not on the Test Users list. Add it at:
+
+```
 https://console.cloud.google.com/auth/audience?project=YOUR_PROJECT_ID
+```
 
 ### `pnpm setup` fails on Homebrew-installed pnpm
 
-Homebrew-managed pnpm can't self-install into `~/Library/pnpm`. You don't
-need `pnpm setup` for this project — gws is a local devDep, not a global
-binary. Just `pnpm install` is enough.
+You don't need `pnpm setup` for this project — gws is a local devDep, not a global
+binary. Running `pnpm install` is sufficient.
 
 ### `gws not found in node_modules/.bin`
 
-You haven't run `pnpm install` yet, or the install failed. Verify:
+You haven't run `pnpm install` yet, or the install failed. Check:
 
 ```bash
 ls node_modules/.bin/gws
@@ -759,59 +660,50 @@ If missing, run `pnpm install` again and watch for postinstall script errors.
 
 ## Security
 
-This tool requests OAuth scope `gmail.modify`, which can move and label
-messages in your mailbox. It cannot read message bodies (scope intentionally
-excludes `gmail.readonly` and `mail.google.com`) and cannot permanently
-delete anything (only `addLabelIds=["TRASH"]`, recoverable for 30 days).
-
-### Reporting vulnerabilities
-
-If you find a security issue — credential leakage, scope expansion,
-classification-routing exploit, anything that could expose user data — please
-**do not file a public issue**. Instead, contact the maintainer privately
-through the repository's security advisory feature (if available) or via the
-contact listed in the repository's metadata.
+This tool requests OAuth scope `gmail.modify`. It can read metadata and move messages
+between labels (including Trash). It cannot read message bodies (the scope excludes
+`gmail.readonly` and `mail.google.com`) and it cannot permanently delete anything
+(`addLabelIds=["TRASH"]` only, recoverable for 30 days).
 
 ### Threat model
 
-In scope:
+**In scope:**
+- Prompt injection via email header content — mitigated by structured parsing and an
+  explicit `metadataHeaders` allowlist; no free-text field reaches an LLM unfiltered.
+- Token exfiltration — mitigated by gws's AES-256-GCM encryption of credentials and
+  OS keyring storage of the encryption key.
+- Mistaken classification leading to mass trashing — mitigated by `--test` mode, the
+  `cleanup_plan.md` approval gate, and Gmail's 30-day Trash retention.
 
-- Prompt injection via email **header content** — mitigated by structured
-  parsing and limiting LLM input to a fixed allowlist of header fields.
-- Token exfiltration — mitigated by gws's AES-256-GCM encryption of
-  credentials and OS keyring storage of the encryption key.
-- Mistaken classification → mass trashing — mitigated by `--test` mode,
-  approval gate, and Gmail's 30-day Trash retention.
+**Out of scope:**
+- Compromised local user account (access to `~/.config/gws/` plus the OS keyring can
+  call Gmail with your scope).
+- Compromised GCP project (an attacker who can modify the OAuth client could redirect
+  the consent flow).
 
-Out of scope:
+### Reporting vulnerabilities
 
-- A compromised local user account (anyone with access to `~/.config/gws/` and
-  the OS keyring can call Gmail with your scope).
-- A compromised GCP project (anyone who can modify the OAuth client
-  configuration could redirect the consent flow).
+Do not file a public issue for security vulnerabilities. Use the repository's security
+advisory feature or contact the maintainer privately through the repository metadata.
 
 ---
 
 ## Contributing
 
-Issues and pull requests welcome. Before submitting:
+Issues and pull requests welcome.
 
-- Read `CLAUDE.md` for project conventions (header-only safety, JSONL
-  streaming, ISO-8601 log filenames, no Anthropic SDK).
+- Read `CLAUDE.md` before submitting — it documents the hard safety invariants
+  (header-only, no Anthropic SDK, no permanent delete) that must not be broken.
 - Run `pnpm preflight` before opening a PR to confirm the basics still work.
 - Keep changes scoped — large refactors should be discussed in an issue first.
-- Don't introduce dependencies without a strong justification. The current
-  `package.json` is intentionally minimal (`dotenv` only at runtime).
+- Avoid new runtime dependencies. The current `package.json` runtime dep is `dotenv`
+  only; that is intentional.
 
-### Branching
+**Branching:** work off `main`. Short topic-branch names are fine; no `feat/` prefix
+required.
 
-Work off `main`. Feature branches named `<topic>` are fine. No need for
-prefixes like `feat/` or `fix/`.
-
-### Commit messages
-
-Imperative present-tense, brief: "add labels-delete subcommand", "fix gws
-binary resolution under non-cwd invocation". One commit per logical change.
+**Commit style:** imperative present-tense, one logical change per commit.
+Examples: `add labels-delete subcommand`, `fix gws binary resolution under non-cwd invocation`.
 
 ---
 
@@ -824,9 +716,9 @@ MIT. See [LICENSE](LICENSE).
 ## Acknowledgements
 
 - [@googleworkspace/cli](https://github.com/googleworkspace/cli) — without
-  dynamic-Discovery-Service command generation this would be a thousand lines
-  of curl + jq.
-- [RFC 8058](https://datatracker.ietf.org/doc/html/rfc8058) — one-click
-  unsubscribe spec.
-- Google for not shipping a "delete most of this" button, thereby creating the
-  reason for this repo's existence.
+  auto-generated Discovery Service commands this would be a thousand lines of curl and
+  jq.
+- [RFC 8058](https://datatracker.ietf.org/doc/html/rfc8058) — one-click unsubscribe
+  spec.
+- Google, for not shipping a "delete most of this" button, thereby creating the reason
+  for this repo's existence.
