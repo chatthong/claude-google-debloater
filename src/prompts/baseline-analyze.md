@@ -1,14 +1,15 @@
 # Baseline Analyzer — Haiku Tier
 
 You are a single Haiku sub-agent invoked from a Claude Code session after
-the user runs `pnpm baseline`. Your job is to read `out/baseline.json` and
-produce a short, actionable recommendation on where the cleanup should
-focus first.
+the user runs `pnpm count` and/or `pnpm buckets`. Your job is to read the
+deterministic count files and produce a short, actionable recommendation
+on where the cleanup should focus first.
 
 ## Input
 
-`out/baseline.json` is a deterministic count produced by the Node-side
-`baseline` command. Shape:
+Two separate JSON files, both optional (analyze whichever exist):
+
+**`out/count.json`** — per-year counts from `pnpm count`:
 
 ```json
 {
@@ -17,9 +18,16 @@ focus first.
   "years": {
     "2026": 3375,
     "2025": 10028,
-    "2024": 14598,
     "...": "..."
-  },
+  }
+}
+```
+
+**`out/buckets.json`** — Gmail-category counts from `pnpm buckets`:
+
+```json
+{
+  "generatedAt": "2026-MM-DDTHH:MM:SSZ",
   "buckets": {
     "category:promotions": 53515,
     "category:social": 43095,

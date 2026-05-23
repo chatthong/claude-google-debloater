@@ -7,7 +7,8 @@
   "scripts": {
     "cleanup": "tsx src/cli.ts",
     "preflight": "tsx src/cli.ts preflight",
-    "baseline": "tsx src/cli.ts baseline",
+    "count": "tsx src/cli.ts count",
+    "buckets": "tsx src/cli.ts buckets",
     "fetch": "tsx src/cli.ts fetch",
     "labels": "tsx src/cli.ts labels",
     "classify": "tsx src/cli.ts classify",

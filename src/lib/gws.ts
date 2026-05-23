@@ -32,6 +32,17 @@ async function gws(args: string[]): Promise<string> {
   return stdout;
 }
 
+export async function countMessagesMatching(query: string): Promise<number> {
+  let total = 0;
+  let pageToken: string | undefined;
+  do {
+    const { ids, nextPageToken } = await listMessageIds(query, pageToken);
+    total += ids.length;
+    pageToken = nextPageToken;
+  } while (pageToken);
+  return total;
+}
+
 export async function listMessageIds(
   query: string,
   pageToken?: string,

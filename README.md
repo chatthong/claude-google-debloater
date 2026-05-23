@@ -436,17 +436,20 @@ The pipeline mixes Node commands (deterministic I/O) with Claude orchestration
 pnpm preflight                              # verify install, auth, env
 pnpm labels                                 # list user-defined Gmail labels
 pnpm cleanup labels-delete LABEL_ID [...]   # delete one or more labels by ID
-pnpm baseline                               # year/category counts (default: last 10y)
-pnpm baseline --years 5                     # narrow to the last 5 years
-pnpm baseline --years 2018-2026             # explicit range (either direction)
+pnpm count                                  # per-year message counts (default: last 10y)
+pnpm count --years 5                        # narrow to the last 5 years
+pnpm count --years 2018-2026                # explicit range (either direction)
+pnpm buckets                                # Gmail category counts (promotions/social/updates/forums)
 pnpm fetch                                  # fetch headers for all messages
 pnpm fetch "category:promotions"            # or scope by Gmail search query
 ```
 
-After `pnpm baseline`, in a Claude Code session say **"analyze baseline"** —
-a Haiku sub-agent (prompt at `src/prompts/baseline-analyze.md`) reads the
-deterministic counts and writes `out/baseline_analysis.md` with a recommended
-first-sweep year range, category filter, and a ready-to-paste fetch query.
+After `pnpm count` and/or `pnpm buckets`, in a Claude Code session say
+**"analyze baseline"** — a Haiku sub-agent (prompt at
+`src/prompts/baseline-analyze.md`) reads `out/count.json` and
+`out/buckets.json` (whichever exist) and writes `out/baseline_analysis.md`
+with a recommended first-sweep year range, category filter, and a
+ready-to-paste fetch query.
 
 After `pnpm fetch`, `out/headers.jsonl` contains every message's headers,
 ready for classification.
@@ -500,10 +503,11 @@ say to Claude inside a `claude` session at the project root.
 | `pnpm preflight` | Verify gws install, auth, env vars, and mailbox reachability. Run first. |
 | `pnpm labels` | List user-defined Gmail labels with message counts. Writes a labels report. |
 | `pnpm cleanup labels-delete <id> [id ...]` | Delete the named labels (messages keep their other labels). |
-| `pnpm baseline` | Year + Gmail-category counts (default: last 10 years). Writes `out/baseline.json`. |
-| `pnpm baseline --years 5` | Narrow to the last N years. |
-| `pnpm baseline --years 2018-2026` | Explicit range; either direction works (auto-sorted). |
-| **Claude session:** `analyze baseline` | Spawns a Haiku sub-agent that reads `out/baseline.json` and writes `out/baseline_analysis.md` with first-sweep recommendations. Prompt: `src/prompts/baseline-analyze.md`. |
+| `pnpm count` | Per-year message counts (default: last 10 years). Writes `out/count.json`. |
+| `pnpm count --years 5` | Narrow to the last N years. |
+| `pnpm count --years 2018-2026` | Explicit range; either direction works (auto-sorted). |
+| `pnpm buckets` | Counts the four Gmail categories (`promotions`/`social`/`updates`/`forums`). Writes `out/buckets.json`. |
+| **Claude session:** `analyze baseline` | Spawns a Haiku sub-agent that reads `out/count.json` and `out/buckets.json` and writes `out/baseline_analysis.md` with first-sweep recommendations. Prompt: `src/prompts/baseline-analyze.md`. |
 | `pnpm fetch [query]` | Fetch headers (resumable) → `out/headers.jsonl`. Default query: `in:anywhere -in:chats`. Override with any Gmail search syntax. |
 | **Claude session:** `classify` | Drive the Haiku → Sonnet → Opus pipeline over `out/headers.jsonl` → `out/decisions.jsonl`. Tier prompts under `src/prompts/{haiku,sonnet,opus}.md`. |
 | `pnpm plan` | Roll up `out/decisions.jsonl` into `out/cleanup_plan.md` for human review. |
@@ -526,7 +530,7 @@ Environment variables that affect commands (all optional, see `.env.example`):
 | `GOOGLE_WORKSPACE_CLI_SANITIZE_MODE` | gws Model Armor | `warn` |
 | `CLEANUP_MAX_MESSAGES` | `pnpm fetch` | unlimited |
 | `CLEANUP_CONCURRENCY` | `pnpm fetch` | `8` |
-| `CLEANUP_YEAR_LOOKBACK` | `pnpm baseline` (when `--years` is omitted) | `10` |
+| `CLEANUP_YEAR_LOOKBACK` | `pnpm count` and `--years` filters (when omitted) | `10` |
 | `CLEANUP_SECONDS_PER_BATCH` | `pnpm plan` ETA | `2` |
 | `PLAN_TOP_N` | `pnpm plan` table size | `25` |
 
@@ -542,7 +546,8 @@ Resumable artifacts. Re-running a command updates these in place.
 
 | File | Purpose |
 |---|---|
-| `baseline.json` | Per-year + per-category counts before action |
+| `count.json` | Per-year message counts (from `pnpm count`) |
+| `buckets.json` | Gmail-category counts (from `pnpm buckets`) |
 | `headers.jsonl` | One header record per line, resumable cache |
 | `decisions.jsonl` | Per-message: tier reached, action, model confidence |
 | `sender_index.csv` | Aggregated per-sender: count, signals, recommendation |

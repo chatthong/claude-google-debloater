@@ -1,5 +1,6 @@
 import { preflight } from "./preflight.ts";
-import { baseline } from "./baseline.ts";
+import { count } from "./count.ts";
+import { buckets } from "./buckets.ts";
 import { fetchHeaders } from "./fetch.ts";
 import { plan } from "./plan.ts";
 import { execute } from "./execute.ts";
@@ -10,7 +11,8 @@ const rest = process.argv.slice(3);
 
 const commands: Record<string, (args: string[]) => Promise<void>> = {
   preflight: () => preflight(),
-  baseline: (args) => baseline(args),
+  count: (args) => count(args),
+  buckets: () => buckets(),
   fetch: (args) => fetchHeaders(args[0]),
   labels: () => listUserLabels(),
   "labels-delete": (args) => deleteLabels(args),
@@ -34,7 +36,7 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
 
 if (!cmd || !commands[cmd]) {
   console.error(
-    "Usage: pnpm cleanup <preflight|baseline|fetch|labels|labels-delete|classify|plan|execute>",
+    "Usage: pnpm cleanup <preflight|count|buckets|fetch|labels|labels-delete|classify|plan|execute>",
   );
   process.exit(1);
 }
