@@ -438,6 +438,7 @@ pnpm labels                                 # list user-defined Gmail labels
 pnpm cleanup labels-delete LABEL_ID [...]   # delete one or more labels by ID
 pnpm count                                  # per-year message counts (default: last 10y)
 pnpm count --years 5                        # narrow to the last 5 years
+pnpm count --years 2025                     # just one year
 pnpm count --years 2018-2026                # explicit range (either direction)
 pnpm buckets                                # Gmail category counts (promotions/social/updates/forums)
 pnpm fetch                                  # fetch headers for all messages

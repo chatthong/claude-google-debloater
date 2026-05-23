@@ -6,9 +6,11 @@ const DEFAULT_YEAR_LOOKBACK = Number(process.env.CLEANUP_YEAR_LOOKBACK ?? 10);
  * Parse the --years flag value.
  *
  * Accepts:
- *   undefined        → last N years (env CLEANUP_YEAR_LOOKBACK, default 10)
- *   "10" or "10year" → last 10 years
- *   "2010-2026" or "2026-2010" → explicit inclusive range (auto-sorted)
+ *   undefined                  → last N years (env CLEANUP_YEAR_LOOKBACK, default 10)
+ *   "5", "10"                  → last N years (1–3 digit lookback)
+ *   "5year", "10years"         → last N years (explicit unit, any magnitude)
+ *   "2025"                     → just that single year (4-digit shorthand)
+ *   "2010-2026", "2026-2010"   → inclusive range, either direction (auto-sorted)
  */
 export function parseYearRange(arg: string | undefined): {
   fromYear: number;
@@ -18,19 +20,31 @@ export function parseYearRange(arg: string | undefined): {
   if (!arg) {
     return { fromYear: currentYear - DEFAULT_YEAR_LOOKBACK, toYear: currentYear };
   }
-  const lookback = arg.match(/^(\d+)(?:year)?s?$/i);
-  if (lookback) {
-    const n = Number(lookback[1]);
+
+  const explicitLookback = arg.match(/^(\d+)years?$/i);
+  if (explicitLookback) {
+    const n = Number(explicitLookback[1]);
     return { fromYear: currentYear - n, toYear: currentYear };
   }
+
   const range = arg.match(/^(\d{4})[\s_-]+(\d{4})$/);
   if (range) {
     const a = Number(range[1]);
     const b = Number(range[2]);
     return { fromYear: Math.min(a, b), toYear: Math.max(a, b) };
   }
+
+  const pure = arg.match(/^(\d+)$/);
+  if (pure) {
+    const n = Number(pure[1]);
+    if (pure[1]!.length === 4) {
+      return { fromYear: n, toYear: n };
+    }
+    return { fromYear: currentYear - n, toYear: currentYear };
+  }
+
   throw new Error(
-    `Invalid --years value: "${arg}". Examples: "10", "10year", "2010-2026", "2026-2010".`,
+    `Invalid --years value: "${arg}". Examples: "5", "10year", "2025", "2010-2026".`,
   );
 }
 
