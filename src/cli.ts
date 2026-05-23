@@ -10,7 +10,7 @@ const rest = process.argv.slice(3);
 
 const commands: Record<string, (args: string[]) => Promise<void>> = {
   preflight: () => preflight(),
-  baseline: () => baseline(),
+  baseline: (args) => baseline(args),
   fetch: (args) => fetchHeaders(args[0]),
   labels: () => listUserLabels(),
   "labels-delete": (args) => deleteLabels(args),

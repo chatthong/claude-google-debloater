@@ -433,11 +433,19 @@ The pipeline mixes Node commands (deterministic I/O) with Claude orchestration
 ### Step 1 — Node-side preparation
 
 ```bash
-pnpm preflight       # verify install, auth, env
-pnpm labels          # list & nuke useless Gmail labels (interactive)
-pnpm baseline        # year/category counts before we touch anything
-pnpm fetch           # fetch headers for all messages (resumable)
+pnpm preflight                       # verify install, auth, env
+pnpm labels                          # list user-defined Gmail labels
+pnpm baseline                        # year/category counts (default: last 10 years)
+pnpm baseline --years 5              # narrow to the last 5 years
+pnpm baseline --years 2018-2026      # explicit range (either direction)
+pnpm fetch                           # fetch headers for all messages (resumable)
+pnpm fetch "category:promotions"     # or scope by Gmail search query
 ```
+
+After `pnpm baseline`, in a Claude Code session say **"analyze baseline"** —
+a Haiku sub-agent (prompt at `src/prompts/baseline-analyze.md`) reads the
+deterministic counts and writes `out/baseline_analysis.md` with a recommended
+first-sweep year range, category filter, and a ready-to-paste fetch query.
 
 After `pnpm fetch`, `out/headers.jsonl` contains every message's headers,
 ready for classification.

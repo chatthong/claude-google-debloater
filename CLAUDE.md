@@ -132,7 +132,10 @@ Real-world mailboxes the tool is designed for typically look like:
 pnpm preflight       # verify gws install, auth, env, mailbox reachable
 pnpm labels          # list user-defined Gmail labels
 pnpm cleanup labels-delete <id> [id ...]  # delete specific labels
-pnpm baseline        # year + category counts (read-only)
+pnpm baseline        # year + category counts (default 10y lookback)
+pnpm baseline --years 5              # last N years
+pnpm baseline --years 2018-2026      # explicit range
+# Then in a Claude Code session: "analyze baseline" → Haiku writes out/baseline_analysis.md
 pnpm fetch           # header fetch → out/headers.jsonl (resumable)
 # (classification happens in a Claude Code session — say "classify")
 pnpm plan            # produce out/cleanup_plan.md from decisions.jsonl
