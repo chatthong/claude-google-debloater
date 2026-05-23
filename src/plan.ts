@@ -1,11 +1,17 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { GMAIL_MODIFY_BATCH_SIZE } from "./lib/gws.ts";
 import { Reporter } from "./lib/report.ts";
+import {
+  extractYearsArg,
+  idsInYearRange,
+  parseYearRange,
+} from "./lib/years.ts";
 import type { Action, Decision } from "./lib/types.ts";
 
 const PLAN_TOP_N = Number(process.env.PLAN_TOP_N ?? 25);
 const SECONDS_PER_BATCH = Number(process.env.CLEANUP_SECONDS_PER_BATCH ?? 2);
 const DECISIONS_FILE = "out/decisions.jsonl";
+const HEADERS_FILE = "out/headers.jsonl";
 
 interface SenderRollup {
   senderEmail: string;
@@ -91,15 +97,40 @@ function table(rollup: SenderRollup[]): string {
   return [head, ...rows].join("\n");
 }
 
-export async function plan(): Promise<void> {
+export async function plan(args: string[] = []): Promise<void> {
   const report = new Reporter("plan");
   await mkdir("out", { recursive: true });
 
-  const decisions = await loadDecisions().catch(() => {
+  const yearsArg = extractYearsArg(args);
+  const yearRange = yearsArg ? parseYearRange(yearsArg) : undefined;
+
+  let allDecisions = await loadDecisions().catch(() => {
     throw new Error(
       `No decisions found at ${DECISIONS_FILE}. Run the classification step in a Claude Code session first.`,
     );
   });
+
+  if (yearRange) {
+    const inRange = await idsInYearRange(
+      HEADERS_FILE,
+      yearRange.fromYear,
+      yearRange.toYear,
+    ).catch(() => {
+      throw new Error(
+        `--years requires ${HEADERS_FILE} to resolve message dates. Run pnpm fetch first.`,
+      );
+    });
+    const before = allDecisions.length;
+    allDecisions = allDecisions.filter((d) => inRange.has(d.id));
+    console.log(
+      `→ Year filter ${yearRange.fromYear}–${yearRange.toYear}: ${allDecisions.length.toLocaleString()} of ${before.toLocaleString()} decisions kept.`,
+    );
+    report.set("Year filter", `${yearRange.fromYear}–${yearRange.toYear}`);
+    report.set("Decisions in range", allDecisions.length.toLocaleString());
+    report.set("Decisions filtered out", (before - allDecisions.length).toLocaleString());
+  }
+
+  const decisions = allDecisions;
   const fromMap = await loadFromMap();
 
   const byAction = new Map<Action, Decision[]>();

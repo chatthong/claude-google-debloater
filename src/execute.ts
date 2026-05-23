@@ -3,9 +3,15 @@ import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { batchModify } from "./lib/gws.ts";
 import { Reporter } from "./lib/report.ts";
+import {
+  extractYearsArg,
+  idsInYearRange,
+  parseYearRange,
+} from "./lib/years.ts";
 import type { Action, Decision } from "./lib/types.ts";
 
 const DECISIONS_FILE = "out/decisions.jsonl";
+const HEADERS_FILE = "out/headers.jsonl";
 const TEST_BATCH_SIZE = 100;
 
 const TRASH_ACTIONS: Action[] = ["trash", "unsubscribe"];
@@ -63,11 +69,35 @@ export async function execute(args: string[]): Promise<void> {
   const report = new Reporter("execute");
   report.set("Mode", test ? "test (100-message smoke)" : "full");
 
-  const decisions = await loadDecisions().catch(() => {
+  const yearsArg = extractYearsArg(args);
+  const yearRange = yearsArg ? parseYearRange(yearsArg) : undefined;
+
+  let decisions = await loadDecisions().catch(() => {
     throw new Error(
       `No decisions found at ${DECISIONS_FILE}. Run classify in a Claude Code session first.`,
     );
   });
+
+  if (yearRange) {
+    const inRange = await idsInYearRange(
+      HEADERS_FILE,
+      yearRange.fromYear,
+      yearRange.toYear,
+    ).catch(() => {
+      throw new Error(
+        `--years requires ${HEADERS_FILE} to resolve message dates. Run pnpm fetch first.`,
+      );
+    });
+    const before = decisions.length;
+    decisions = decisions.filter((d) => inRange.has(d.id));
+    console.log(
+      `→ Year filter ${yearRange.fromYear}–${yearRange.toYear}: ${decisions.length.toLocaleString()} of ${before.toLocaleString()} decisions targeted.`,
+    );
+    report.set("Year filter", `${yearRange.fromYear}–${yearRange.toYear}`);
+    report.set("Decisions in range", decisions.length);
+    report.set("Decisions filtered out", before - decisions.length);
+  }
+
   const { trash: allTrash, archive: allArchive } = partitionByAction(decisions);
   const labeledTotal = decisions.filter((d) => d.action.startsWith("label:")).length;
 

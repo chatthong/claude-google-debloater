@@ -14,7 +14,7 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   fetch: (args) => fetchHeaders(args[0]),
   labels: () => listUserLabels(),
   "labels-delete": (args) => deleteLabels(args),
-  plan: () => plan(),
+  plan: (args) => plan(args),
   execute: (args) => execute(args),
   classify: async () => {
     console.log(

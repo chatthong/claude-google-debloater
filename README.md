@@ -507,8 +507,15 @@ say to Claude inside a `claude` session at the project root.
 | `pnpm fetch [query]` | Fetch headers (resumable) → `out/headers.jsonl`. Default query: `in:anywhere -in:chats`. Override with any Gmail search syntax. |
 | **Claude session:** `classify` | Drive the Haiku → Sonnet → Opus pipeline over `out/headers.jsonl` → `out/decisions.jsonl`. Tier prompts under `src/prompts/{haiku,sonnet,opus}.md`. |
 | `pnpm plan` | Roll up `out/decisions.jsonl` into `out/cleanup_plan.md` for human review. |
+| `pnpm plan --years 2018-2026` | Same, but scoped to messages whose date falls in the given range (or `--years 5` for last N years). |
 | `pnpm execute --test` | Trash the first 100 candidates, prompt yes/no for the rest. Trash is recoverable 30 days. |
+| `pnpm execute --test --years 2018-2020` | Test run scoped to a year range. |
 | `pnpm execute --confirm` | Full destructive run, no prompt. Refuses without either flag. |
+| `pnpm execute --confirm --years 2018-2020` | Full run scoped to a year range. |
+
+`--years` on `plan` and `execute` uses `out/headers.jsonl` to resolve each
+message's date, so `pnpm fetch` must have run first. The same value forms
+work everywhere (`10`, `10year`, `2010-2026`, `2026-2010`).
 
 Environment variables that affect commands (all optional, see `.env.example`):
 
