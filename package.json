@@ -1,0 +1,26 @@
+{
+  "name": "claude-gmail-cleaner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "cleanup": "tsx src/cli.ts",
+    "preflight": "tsx src/cli.ts preflight",
+    "baseline": "tsx src/cli.ts baseline",
+    "fetch": "tsx src/cli.ts fetch",
+    "labels": "tsx src/cli.ts labels",
+    "classify": "tsx src/cli.ts classify",
+    "plan": "tsx src/cli.ts plan",
+    "execute": "tsx src/cli.ts execute"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@googleworkspace/cli": "latest",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
