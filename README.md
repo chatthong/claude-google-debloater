@@ -436,16 +436,26 @@ The pipeline mixes Node commands (deterministic I/O) with Claude orchestration
 pnpm preflight                              # verify install, auth, env
 pnpm labels                                 # list user-defined Gmail labels
 pnpm cleanup labels-delete LABEL_ID [...]   # delete one or more labels by ID
+
 pnpm count                                  # per-year message counts (default: last 10y)
-pnpm count --years 5                        # narrow to the last 5 years
-pnpm count --years 2025                     # just one year
-pnpm count --years 2018-2026                # explicit range (either direction)
 pnpm buckets                                # Gmail category counts (promotions/social/updates/forums)
-pnpm buckets --years 2025                   # category counts within a year
-pnpm fetch                                  # fetch headers for all messages
+pnpm fetch                                  # fetch headers (default query: in:anywhere -in:chats)
 pnpm fetch "category:promotions"            # or scope by Gmail search query
-pnpm fetch --years 2025                     # fetch only messages from a year
-pnpm fetch "category:promotions" --years 5  # combine query + year filter
+```
+
+`--years` works the same way on **every** read-side command (`count`, `buckets`,
+`fetch`) and every action-side command (`plan`, `execute`). Accepted value
+forms are listed in the [`--years` reference](#--years-value-forms) below.
+Examples (the same value works on any of these commands):
+
+```bash
+pnpm count   --years 5            # last 5 years
+pnpm count   --years 2025         # just 2025
+pnpm count   --years 2018-2026    # explicit range
+pnpm buckets --years 2025         # category counts inside 2025
+pnpm buckets --years 2018-2026    # category counts across a range
+pnpm fetch   --years 2025                       # fetch one year
+pnpm fetch   "category:promotions" --years 5    # query + range
 ```
 
 After `pnpm count` and/or `pnpm buckets`, in a Claude Code session say
@@ -502,30 +512,43 @@ so prompt iteration is free of Gmail calls.
 All Node-side commands. Anything labeled **Claude session** is something you
 say to Claude inside a `claude` session at the project root.
 
-| Command | Purpose |
-|---|---|
-| `pnpm preflight` | Verify gws install, auth, env vars, and mailbox reachability. Run first. |
-| `pnpm labels` | List user-defined Gmail labels with message counts. Writes a labels report. |
-| `pnpm cleanup labels-delete <id> [id ...]` | Delete the named labels (messages keep their other labels). |
-| `pnpm count` | Per-year message counts (default: last 10 years). Writes `out/count.json`. |
-| `pnpm count --years 5` | Narrow to the last N years. |
-| `pnpm count --years 2018-2026` | Explicit range; either direction works (auto-sorted). |
-| `pnpm buckets` | Counts the four Gmail categories (`promotions`/`social`/`updates`/`forums`). Writes `out/buckets.json`. |
-| `pnpm buckets --years 2025` | Category counts limited to a year or range. |
-| **Claude session:** `analyze baseline` | Spawns a Haiku sub-agent that reads `out/count.json` and `out/buckets.json` and writes `out/baseline_analysis.md` with first-sweep recommendations. Prompt: `src/prompts/baseline-analyze.md`. |
-| `pnpm fetch [query]` | Fetch headers (resumable) → `out/headers.jsonl`. Default query: `in:anywhere -in:chats`. Override with any Gmail search syntax. |
-| `pnpm fetch --years 2025` | Fetch only messages dated in a year or range; can be combined with a query. |
-| **Claude session:** `classify` | Drive the Haiku → Sonnet → Opus pipeline over `out/headers.jsonl` → `out/decisions.jsonl`. Tier prompts under `src/prompts/{haiku,sonnet,opus}.md`. |
-| `pnpm plan` | Roll up `out/decisions.jsonl` into `out/cleanup_plan.md` for human review. |
-| `pnpm plan --years 2018-2026` | Same, but scoped to messages whose date falls in the given range (or `--years 5` for last N years). |
-| `pnpm execute --test` | Trash the first 100 candidates, prompt yes/no for the rest. Trash is recoverable 30 days. |
-| `pnpm execute --test --years 2018-2020` | Test run scoped to a year range. |
-| `pnpm execute --confirm` | Full destructive run, no prompt. Refuses without either flag. |
-| `pnpm execute --confirm --years 2018-2020` | Full run scoped to a year range. |
+| Command | Purpose | `--years`? |
+|---|---|:---:|
+| `pnpm preflight` | Verify gws install, auth, env vars, mailbox reachability. Run first. | — |
+| `pnpm labels` | List user-defined Gmail labels with message counts. | — |
+| `pnpm cleanup labels-delete <id> [id ...]` | Delete the named labels (messages keep their other labels). | — |
+| `pnpm count` | Per-year message counts. Writes `out/count.json`. | ✓ |
+| `pnpm buckets` | Counts the four Gmail categories. Writes `out/buckets.json`. | ✓ |
+| **Claude session:** `analyze baseline` | Haiku sub-agent reads `out/count.json` and `out/buckets.json` → writes `out/baseline_analysis.md`. Prompt: `src/prompts/baseline-analyze.md`. | — |
+| `pnpm fetch [query]` | Fetch headers (resumable) → `out/headers.jsonl`. Default query: `in:anywhere -in:chats`. | ✓ |
+| **Claude session:** `classify` | Drive the Haiku → Sonnet → Opus pipeline → `out/decisions.jsonl`. Tier prompts under `src/prompts/{haiku,sonnet,opus}.md`. | — |
+| `pnpm plan` | Roll up `out/decisions.jsonl` into `out/cleanup_plan.md`. | ✓ |
+| `pnpm execute --test` | Trash the first 100 candidates, prompt yes/no for the rest. | ✓ |
+| `pnpm execute --confirm` | Full destructive run, no prompt. Refuses without either flag. | ✓ |
 
-`--years` on `plan` and `execute` uses `out/headers.jsonl` to resolve each
-message's date, so `pnpm fetch` must have run first. The same value forms
-work everywhere (`10`, `10year`, `2010-2026`, `2026-2010`).
+`--years` behavior is identical across every checked command above — same
+parser, same value forms (see [`--years` value forms](#--years-value-forms)).
+`plan` and `execute` resolve dates from `out/headers.jsonl`, so `pnpm fetch`
+must have run before they can filter by year.
+
+### `--years` value forms
+
+The flag accepts five forms. The same value parses identically on every command
+that supports `--years` (`count`, `buckets`, `fetch`, `plan`, `execute`).
+
+| Form | Meaning |
+|---|---|
+| _omitted_ | Default 10-year lookback (override with env `CLEANUP_YEAR_LOOKBACK`). |
+| `5` | Last 5 years. Any 1–3 digit number → lookback. |
+| `5year` / `10years` | Last N years, explicit unit (any magnitude). |
+| `2025` | Just the year 2025. Any 4-digit number → single-year shorthand. |
+| `2010-2026` | Inclusive range. |
+| `2026-2010` | Same range — direction is auto-sorted, so finger memory doesn't matter. |
+
+Internally these are all parsed to `{ fromYear, toYear }`. On `count` /
+`buckets` / `fetch` the range becomes part of the Gmail query
+(`after:Y1/01/01 before:Y2+1/01/01`). On `plan` / `execute` it filters
+decisions against `out/headers.jsonl` dates.
 
 Environment variables that affect commands (all optional, see `.env.example`):
 
