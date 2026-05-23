@@ -433,13 +433,14 @@ The pipeline mixes Node commands (deterministic I/O) with Claude orchestration
 ### Step 1 — Node-side preparation
 
 ```bash
-pnpm preflight                       # verify install, auth, env
-pnpm labels                          # list user-defined Gmail labels
-pnpm baseline                        # year/category counts (default: last 10 years)
-pnpm baseline --years 5              # narrow to the last 5 years
-pnpm baseline --years 2018-2026      # explicit range (either direction)
-pnpm fetch                           # fetch headers for all messages (resumable)
-pnpm fetch "category:promotions"     # or scope by Gmail search query
+pnpm preflight                              # verify install, auth, env
+pnpm labels                                 # list user-defined Gmail labels
+pnpm cleanup labels-delete LABEL_ID [...]   # delete one or more labels by ID
+pnpm baseline                               # year/category counts (default: last 10y)
+pnpm baseline --years 5                     # narrow to the last 5 years
+pnpm baseline --years 2018-2026             # explicit range (either direction)
+pnpm fetch                                  # fetch headers for all messages
+pnpm fetch "category:promotions"            # or scope by Gmail search query
 ```
 
 After `pnpm baseline`, in a Claude Code session say **"analyze baseline"** —
@@ -488,6 +489,39 @@ in `src/prompts/` and re-running classification in your Claude Code session.
 This is the design point of separating fetch from classify: header fetching
 costs Gmail quota; classification costs Claude usage. Keep them independent
 so prompt iteration is free of Gmail calls.
+
+### Command reference
+
+All Node-side commands. Anything labeled **Claude session** is something you
+say to Claude inside a `claude` session at the project root.
+
+| Command | Purpose |
+|---|---|
+| `pnpm preflight` | Verify gws install, auth, env vars, and mailbox reachability. Run first. |
+| `pnpm labels` | List user-defined Gmail labels with message counts. Writes a labels report. |
+| `pnpm cleanup labels-delete <id> [id ...]` | Delete the named labels (messages keep their other labels). |
+| `pnpm baseline` | Year + Gmail-category counts (default: last 10 years). Writes `out/baseline.json`. |
+| `pnpm baseline --years 5` | Narrow to the last N years. |
+| `pnpm baseline --years 2018-2026` | Explicit range; either direction works (auto-sorted). |
+| **Claude session:** `analyze baseline` | Spawns a Haiku sub-agent that reads `out/baseline.json` and writes `out/baseline_analysis.md` with first-sweep recommendations. Prompt: `src/prompts/baseline-analyze.md`. |
+| `pnpm fetch [query]` | Fetch headers (resumable) → `out/headers.jsonl`. Default query: `in:anywhere -in:chats`. Override with any Gmail search syntax. |
+| **Claude session:** `classify` | Drive the Haiku → Sonnet → Opus pipeline over `out/headers.jsonl` → `out/decisions.jsonl`. Tier prompts under `src/prompts/{haiku,sonnet,opus}.md`. |
+| `pnpm plan` | Roll up `out/decisions.jsonl` into `out/cleanup_plan.md` for human review. |
+| `pnpm execute --test` | Trash the first 100 candidates, prompt yes/no for the rest. Trash is recoverable 30 days. |
+| `pnpm execute --confirm` | Full destructive run, no prompt. Refuses without either flag. |
+
+Environment variables that affect commands (all optional, see `.env.example`):
+
+| Variable | Used by | Default |
+|---|---|---|
+| `GOOGLE_WORKSPACE_PROJECT_ID` | gws (all commands) | OAuth client's own project |
+| `GOOGLE_WORKSPACE_CLI_SANITIZE_TEMPLATE` | gws Model Armor | disabled |
+| `GOOGLE_WORKSPACE_CLI_SANITIZE_MODE` | gws Model Armor | `warn` |
+| `CLEANUP_MAX_MESSAGES` | `pnpm fetch` | unlimited |
+| `CLEANUP_CONCURRENCY` | `pnpm fetch` | `8` |
+| `CLEANUP_YEAR_LOOKBACK` | `pnpm baseline` (when `--years` is omitted) | `10` |
+| `CLEANUP_SECONDS_PER_BATCH` | `pnpm plan` ETA | `2` |
+| `PLAN_TOP_N` | `pnpm plan` table size | `25` |
 
 ---
 
